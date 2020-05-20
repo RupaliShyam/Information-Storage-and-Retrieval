@@ -7,7 +7,7 @@ import PreProcessData.*;
 /**
  * !!! YOU CANNOT CHANGE ANYTHING IN THIS CLASS !!! For INFSCI 2140 in 2019.
  */
-public class HW1Main {
+public class PreProcessCollection {
 
 	public static void main(String[] args) throws Exception {
 		long startTime = System.currentTimeMillis();
