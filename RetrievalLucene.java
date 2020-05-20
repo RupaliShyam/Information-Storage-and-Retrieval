@@ -4,13 +4,8 @@ import Classes.*;
 import IndexingLucene.*;
 import SearchLucene.*;
 
-/**
- * !!! YOU CANNOT CHANGE ANYTHING IN THIS CLASS !!!
- * 
- * Main class for running your HW3.
- * 
- */
-public class HW3MainLucene {
+
+public class RetrievalLucene {
 
 	public static void main(String[] args) throws Exception {
 		// Open index
