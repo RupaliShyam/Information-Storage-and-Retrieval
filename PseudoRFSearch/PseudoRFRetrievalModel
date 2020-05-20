@@ -1,0 +1,176 @@
+package PseudoRFSearch;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+
+import Classes.Document;
+import Classes.Query;
+import IndexingLucene.MyIndexReader;
+import SearchLucene.QueryRetrievalModel;
+import java.util.Comparator;
+import java.util.PriorityQueue;
+
+public class PseudoRFRetrievalModel {
+
+    MyIndexReader ixreader;
+    private final double miu; // The Dirichlet Prior Smoothing factor 
+    private final long collectionSize;
+
+    HashMap<String, Integer> termFrequency; //termfrequency for each document added to tfMap
+    HashMap<String, Long> cfMap; // Collection frequency of each term
+    HashMap<Integer, HashMap<String, Integer>> tfMap; //term frequency of each token in each document
+
+    public PseudoRFRetrievalModel(MyIndexReader ixreader) {
+        this.ixreader = ixreader;
+        collectionSize = 503473; //static value obtained from assignment 2
+        miu = 2000.0;
+    }
+
+    /**
+     * Search for the topic with pseudo relevance feedback in 2017 spring
+     * The returned results (retrieved documents) should be ranked
+     * by the score (from the most relevant to the least).
+     *
+     * @param aQuery The query to be searched for.
+     * @param TopN The maximum number of returned document
+     * @param TopK The count of feedback documents
+     * @param alpha parameter of relevance feedback model
+     * @return TopN most relevant document, in List structure
+     */
+    public List<Document> RetrieveQuery(Query aQuery, int TopN, int TopK, double alpha) throws Exception {
+		// this method will return the retrieval result of the given Query, and this result is enhanced with pseudo relevance feedback
+        // (1) you should first use the original retrieval model to get TopK documents, which will be regarded as feedback documents
+        // (2) implement GetTokenRFScore to get each query token's P(token|feedback model) in feedback documents
+        // (3) implement the relevance feedback model for each token: combine the each query token's original retrieval score P(token|document) with its score in feedback documents P(token|feedback model)
+        // (4) for each document, use the query likelihood language model to get the whole query's new score, P(Q|document)=P(token_1|document')*P(token_2|document')*...*P(token_n|document')
+
+        //get P(token|feedback documents)
+        HashMap<String, Double> TokenRFScore = GetTokenRFScore(aQuery, TopK);
+        // sort all retrieved documents from most relevant to least, and return TopN
+        List<Document> results = new ArrayList<Document>();
+        String[] words = aQuery.GetQueryContent().trim().split(" "); // split each word from the query
+        //define comparator to compare scores of documents
+        Comparator<Document> cmptr = new Comparator<Document>() {
+            @Override
+            public int compare(Document o1, Document o2) {
+                if (o1.score() < o2.score()) {
+                    return -1;
+                }
+                if (o1.score() > o2.score()) {
+                    return 1;
+                }
+                return 0;
+            }
+        };
+        PriorityQueue<Document> MaxScoreDocs = new PriorityQueue<>(TopN, cmptr); //implementing heap with priority queue to store topN scoring documents
+        for (int docID : tfMap.keySet()) {
+            // calculate Dirichlet Prior Smoothing function score
+            // p(w|D) = (|D|/(|D|+MIU))*(c(w,D)/|D|) + (MIU/(|D|+MIU))*p(w|REF)
+            //|D| --> document length
+            //c(w,D) --> term frequency
+            //p(w|REF) --> collection size
+            int documentLength = ixreader.docLength(docID);
+            double score = 1;  // initiate score to 1
+            // iterate through every word in the query content
+            double val1 = documentLength / (documentLength + miu);
+            double val3 = miu / (documentLength + miu);
+            for (String token : words) {
+                long cf = cfMap.get(token);
+                //not considering tokens not present in the collection
+                if (cf == 0) {
+                    continue;
+                }
+                int tf = tfMap.get(docID).getOrDefault(token, 0);
+                double val2 = (double) tf / documentLength;
+                double val4 = (double) cf / collectionSize;
+                score *= alpha * (val1 * val2 + val3 * val4) + (1 - alpha) * TokenRFScore.get(token); //pseudorelevance feedback score
+            }
+            if (MaxScoreDocs.size() < TopN) {
+                Document document = new Document(Integer.toString(docID), ixreader
+                        .getDocno(docID), score);
+                MaxScoreDocs.add(document);
+            } else if (score > MaxScoreDocs.peek().score()) {
+                MaxScoreDocs.poll();
+                Document document = new Document(Integer.toString(docID), ixreader.getDocno(docID), score);
+                MaxScoreDocs.add(document);
+            }
+        }
+
+   // creating an arraylist with only TopN documents to be returned
+        // List<Document> results = new ArrayList<>();
+        for (int i = 0; i < TopN; i++) {
+            results.add(0, MaxScoreDocs.poll());
+        }
+        return results;
+    }
+
+    public HashMap<String, Double> GetTokenRFScore(Query aQuery, int TopK) throws Exception {
+		// for each token in the query, you should calculate token's score in feedback documents: P(token|feedback documents)
+        // use Dirichlet smoothing
+        // save <token, score> in HashMap TokenRFScore, and return it
+        HashMap<String, Double> TokenRFScore = new HashMap<String, Double>();
+
+        // store tokens in aQuery into String array
+        String[] words = aQuery.GetQueryContent().trim().split(" ");
+        List<Document> feedbackDocs = new QueryRetrievalModel(ixreader).retrieveQuery(aQuery, TopK);
+
+        tfMap = new HashMap<>();
+        termFrequency = new HashMap<>();
+        cfMap = new HashMap<>();
+        // search for each token then calculate the corresponding scores
+        for (String token : words) {
+
+            long cf = ixreader.CollectionFreq(token); //get collection frequency
+            cfMap.put(token, cf);
+            //handle if token not present in the collection
+            if (cf == 0) {
+                //System.out.println(token + " not found in the collection.");
+                continue;
+            }
+            int[][] postingList = ixreader.getPostingList(token);
+            for (int[] posting : postingList) {
+                // if posting not already present, create new posting
+                if (!tfMap.containsKey(posting[0])) {
+                    termFrequency = new HashMap<>();
+                    termFrequency.put(token, posting[1]);
+                    tfMap.put(posting[0], termFrequency);
+                } else {
+                    tfMap.get(posting[0]).put(token, posting[1]);
+                }
+            }
+        }
+
+        // combine the Top 100 documents for pseudo relevance
+        int len = 0;
+        HashMap<String, Integer> pseudoDocument = new HashMap<>();
+        for (Document d : feedbackDocs) {
+            tfMap.get(Integer.parseInt(d.docid())).forEach((term, tf) -> {
+                if (pseudoDocument.containsKey(term)) {
+                    pseudoDocument.put(term, tf + pseudoDocument.get(term));
+                } else {
+                    pseudoDocument.put(term, tf);
+                }
+            });
+            len += ixreader.docLength(Integer.parseInt(d.docid()));
+        }
+    //calculate Dirichlet Prior Smoothing function score
+        // p(w|D) = (|D|/(|D|+MIU))*(c(w,D)/|D|) + (MIU/(|D|+MIU))*p(w|REF)
+        //|D| --> document length
+        //c(w,D) --> term frequency
+        //p(w|REF) --> collection size 
+        final int pseudoLen = len;
+        double val1 = pseudoLen / (pseudoLen + miu);
+        double val3 = miu / (pseudoLen + miu);
+        // calculate the probability of pseudoDoc generating each term
+        pseudoDocument.forEach((token, tf) -> {
+            long cf = cfMap.get(token);
+            double val2 = (double) tf / pseudoLen; // c(w, D)
+            double val4 = (double) cf / collectionSize; // p(w|REF)
+            double score = val1 * val2 + val3 * val4;
+            TokenRFScore.put(token, score); // the probability is multiplied to the score
+        });
+        return TokenRFScore;
+    }
+
+}
